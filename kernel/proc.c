@@ -32,30 +32,53 @@ extern char trampoline[]; // trampoline.S
 
 extern uint64 cas(volatile void* addr, int expected, int newval);
 
-void remove_link(){
+void remove_link(struct processList list, int index){  // index = the process index in proc
+
+  if (list.size == 0)
+    return;
+  struct proc* head = &proc[list.head];
+  if (!holding(&head->lock))
+    acquire(&head->lock);
+  if (list.size == 1){
+    if (head->proc_index == index){
+      list.head = -1;
+      list.last = -1;
+      head->next_proc_index = -1;
+
+      list.size--;
+    }
+    release(&head->lock);
+    return;
+  }
+
+  struct proc* next = &proc[head->next_proc_index];
+  if (!holding(&head->lock))
+    acquire(&next);
+
+  while(next->proc_index != index && next->next_proc_index != -1){
+      release(&head->lock);
+      head = next;
+      next = &proc[next->next_proc_index];
+      if (!holding(&head->lock))
+        acquire(&next->lock);
+  }
+  
+  if (next->proc_index == index){
+      head->next_proc_index = next->next_proc_index;
+      next->next_proc_index = -1;
+      list.size--;
+    }
+  release(&head->lock);
+  release(&next->lock);
+
 
 }
 
-void add_link(){
+void add_link(struct processList list, int index){ // index = the process index in proc
   
 
 }
 
-int get_proc_index(int pid){
-  struct proc* p;
-  int i = 0;
-  for (p=proc; p<&proc[NPROC]; p++){
-    acquire(&p->lock);
-    if (p->pid == pid){
-      release(&p->lock);
-      return i;
-    }
-    release(&p->lock);
-    i++;
-  }
-
-  return -1;
-}
 
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
@@ -214,9 +237,8 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
-  int index = get_proc_index(p->pid);
-  remove_link(zombie_list, index);
-  add_link(unused_list, index);
+  remove_link(zombie_list, p->proc_index);
+  add_link(unused_list, p->proc_index);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -522,14 +544,15 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
-        remove_link(&runnable_cpu_lists[cpu_id], p->proc_index);
+        remove_link(runnable_cpu_lists[cpu_id], p->proc_index);
         c->proc = p;
         swtch(&c->context, &p->context);
-        add_link(&runnable_cpu_lists[cpu_id], p->proc_index);
+        add_link(runnable_cpu_lists[cpu_id], p->proc_index);
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
     }
+    
     release(&p->lock);
     
   }
@@ -569,7 +592,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  add_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
+  //add_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
   sched();
   release(&p->lock);
 }
@@ -608,15 +631,17 @@ sleep(void *chan, struct spinlock *lk)
   // guaranteed that we won't miss any wakeup
   // (wakeup locks p->lock),
   // so it's okay to release lk.
-
+  acquire(&p->lock);
+  remove_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
+  release(&p->lock);
   acquire(&p->lock);  //DOC: sleeplock1
   release(lk);
 
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
-  remove_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
-  add_link(sleeping_list, p->proc_index);
+  
+  
   sched();
 
   // Tidy up.
@@ -624,6 +649,7 @@ sleep(void *chan, struct spinlock *lk)
 
   // Reacquire original lock.
   release(&p->lock);
+  add_link(sleeping_list, p->proc_index);
   acquire(lk);
 }
 

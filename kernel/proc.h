@@ -107,7 +107,6 @@ struct proc {
   char name[16];               // Process name (debugging)
 
   int next_proc_index; // index in proc[] of the next link in the list
-  int prev_proc_index; // index in proc[] of the prev link in the list
   int proc_index; 
   int affiliated_cpu;
 };
