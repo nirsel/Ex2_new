@@ -86,7 +86,7 @@ enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 struct proc {
   struct spinlock lock;
 
-  uint list_lock;
+  struct spinlock list_lock;
 
   // p->lock must be held when using these:
   enum procstate state;        // Process state
@@ -116,5 +116,5 @@ struct proc {
 struct processList{
   int head;  // index in proc[] of the head link
   int last;  // index in proc[] of the last link
-  uint head_lock;
+  struct spinlock head_lock;
 };
