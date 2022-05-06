@@ -14,7 +14,7 @@ struct processList zombie_list;
 
 struct processList sleeping_list;
 
-struct processList runnable_cpu_lists[NCPU]; 
+struct processList runnable_cpu_lists[3]; 
 
 
 
@@ -32,50 +32,101 @@ extern char trampoline[]; // trampoline.S
 
 extern uint64 cas(volatile void* addr, int expected, int newval);
 
+void lists_init(void){
+
+  unused_list.head = -1;
+  unused_list.last = -1;
+  sleeping_list.head = -1;
+  sleeping_list.last = -1;
+  zombie_list.head = -1;
+  zombie_list.last = -1;
+  struct processList* p;
+  for (p = runnable_cpu_lists; p<&runnable_cpu_lists[3]; p++){
+      p->head = -1;
+      p->last = -1;
+  }
+
+}
+
 void remove_link(struct processList list, int index){  // index = the process index in proc
 
-  if (list.size == 0)
+  acquire(&list.head_lock);
+  if (list.head == -1){  //empty list
     return;
+  }
+  acquire(&proc[list.head].list_lock);
   struct proc* head = &proc[list.head];
-  if (!holding(&head->lock))
-    acquire(&head->lock);
-  if (list.size == 1){
+  if (list.head == list.last){  //list of size 1
     if (head->proc_index == index){
       list.head = -1;
       list.last = -1;
       head->next_proc_index = -1;
 
-      list.size--;
     }
-    release(&head->lock);
+      release(&head->list_lock);
+      release(&list.head_lock);
+      return;
+  }
+  else{  //list of size > 1 and removing the head
+    if (head->proc_index == index){
+      list.head = head->next_proc_index;
+      head->next_proc_index = -1;
+    }
+    release(&head->list_lock);
+    release(&list.head_lock);
     return;
   }
-
+  acquire(&proc[head->next_proc_index].list_lock);
   struct proc* next = &proc[head->next_proc_index];
-  if (!holding(&head->lock))
-    acquire(&next);
-
+  release(&list.head_lock);
   while(next->proc_index != index && next->next_proc_index != -1){
-      release(&head->lock);
+      release(&head->list_lock);
       head = next;
+      acquire(&proc[head->next_proc_index].list_lock);
       next = &proc[next->next_proc_index];
-      if (!holding(&head->lock))
-        acquire(&next->lock);
   }
-  
   if (next->proc_index == index){
       head->next_proc_index = next->next_proc_index;
       next->next_proc_index = -1;
-      list.size--;
+      if (next->next_proc_index == -1){
+          list.last = head->proc_index;
+      }
     }
-  release(&head->lock);
-  release(&next->lock);
+  release(&head->list_lock);
+  release(&next->list_lock);
 
 
 }
 
 void add_link(struct processList list, int index){ // index = the process index in proc
+  acquire(&list.head_lock);
+  acquire(&proc[index].list_lock);
+  if (list.head == -1){  //empty list
+    list.head = index;
+    list.last = index;
+    release(&list.head_lock);
+    release(&proc[index].list_lock);
+    return;
+  }
+  struct proc* head = &proc[list.head];
+  if (list.head == list.last){  //list of size 1
+
+      head->next_proc_index = index;
+      list.last = index;
+      release(&head->list_lock);
+      release(&list.head_lock);
+      return;
+  }
+  release(&list.head_lock);
+  acquire(&proc[list.last].list_lock);
+  struct proc* last = &proc[list.last];
+  last->next_proc_index = index;
+  list.last = index;
+  release(last->list_lock);
+  release(&proc[index].list_lock);
   
+  return;
+
 
 }
 
@@ -312,7 +363,7 @@ void
 userinit(void)
 {
   struct proc *p;
-
+  lists_init();
   p = allocproc();
   initproc = p;
   
@@ -460,7 +511,6 @@ exit(int status)
   p->state = ZOMBIE;
   int cpu_id = p->affiliated_cpu;
   
-  remove_link(runnable_cpu_lists[cpu_id], p->proc_index);
   add_link(zombie_list, p->proc_index);
   release(&wait_lock);
 
@@ -536,7 +586,8 @@ scheduler(void)
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    while (runnable_cpu_lists[cpu_id].size == 0);
+    
+    while (runnable_cpu_lists[cpu_id].head == -1); // TODO: CHECK IT OUT
     p = &proc[runnable_cpu_lists[cpu_id].head];
     acquire(&p->lock);
     if(p->state == RUNNABLE) {
@@ -592,7 +643,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  //add_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
+  //TODO: add_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
   sched();
   release(&p->lock);
 }
@@ -631,9 +682,7 @@ sleep(void *chan, struct spinlock *lk)
   // guaranteed that we won't miss any wakeup
   // (wakeup locks p->lock),
   // so it's okay to release lk.
-  acquire(&p->lock);
-  remove_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
-  release(&p->lock);
+
   acquire(&p->lock);  //DOC: sleeplock1
   release(lk);
 
@@ -659,35 +708,48 @@ void
 wakeup(void *chan)
 {
   struct proc *p;
-  int size = sleeping_list.size;
+  
   int i;
   int next_link_index;
-  if (size == 0)
+  if (sleeping_list.head == -1)
     return;
-  p = &proc[sleeping_list.head];
-
   
+  acquire(sleeping_list.head_lock);
+  acquire(&proc[sleeping_list.head].list_lock);
+  p = &proc[sleeping_list.head];
   acquire(&p->lock);
   if(p->chan == chan) {
         p->state = RUNNABLE;
         next_link_index = p->next_proc_index;
+        release(sleeping_list.head_lock);
+        release(&proc[sleeping_list.head].list_lock);
         remove_link(sleeping_list, p->proc_index);
         add_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
+  }
+  else{
+        release(sleeping_list.head_lock);
+        release(&proc[sleeping_list.head].list_lock);
   }
   release(&p->lock);
 
   while(next_link_index != -1){   // TODO: NOT SAFE!!
+    acquire(&proc[next_link_index].list_lock);
     p = &proc[next_link_index];
     acquire(&p->lock);
       if(p->chan == chan) {
         p->state = RUNNABLE;
+        release(&proc[next_link_index].list_lock);
         next_link_index = p->next_proc_index;
         remove_link(sleeping_list, p->proc_index);
         add_link(runnable_cpu_lists[p->affiliated_cpu], p->proc_index);
     }
+    else{
+        release(&proc[next_link_index].list_lock);
+    }
     release(&p->lock);
-     
   }
+
+  
 }
 
 // Kill the process with the given pid.
