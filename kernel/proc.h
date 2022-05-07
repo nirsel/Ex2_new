@@ -117,4 +117,5 @@ struct processList{
   int head;  // index in proc[] of the head link
   int last;  // index in proc[] of the last link
   struct spinlock head_lock;
+  uint64 counter;
 };

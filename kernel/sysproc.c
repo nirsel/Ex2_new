@@ -97,7 +97,7 @@ sys_uptime(void)
 }
 
 uint64
-sys_setcpu(void){
+sys_set_cpu(void){
   int cpid;
   if(argint(0, &cpid) < 0)
     return -1;
@@ -107,6 +107,14 @@ sys_setcpu(void){
 }
 
 uint64
-sys_getcpu(void){
+sys_get_cpu(void){
   return get_cpu();
+}
+
+uint64
+sys_cpu_process_count(void){
+  int cpid;
+  if (argint(0, &cpid) < 0)
+    return -1;
+  return cpu_process_count(cpid);
 }

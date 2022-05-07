@@ -22,7 +22,6 @@ main(void)
   }
   dup(0);  // stdout
   dup(0);  // stderr
-  printf("got to here in user program\n");
   for(;;){
     printf("init: starting sh\n");
     pid = fork();
