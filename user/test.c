@@ -5,11 +5,10 @@
 int main(int argc, char** argv){
 
     
-    
-    sleep(2);
-    printf("cpu 1 is %d\n", cpu_process_count(0));
-    printf("cpu 2 is %d\n", cpu_process_count(1));
-    printf("cpu 3 is %d\n", cpu_process_count(2));
+    fork();
+    //fork();
+    printf("%d\n", cpu_process_count(0));
+   
     exit(0);
 
 

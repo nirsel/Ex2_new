@@ -20,6 +20,7 @@ struct processList runnable_cpu_lists[3];
 
 
 
+uint64 increment_counter(struct processList* list);
 
 #ifdef OFF
 int balance = 0;
@@ -50,15 +51,15 @@ void lists_init(void){
   
   
   unused_list.head = -1;
-  unused_list.counter = -1;
+  unused_list.counter = __INT64_MAX__;
   unused_list.last = -1;
   
   sleeping_list.head = -1;
   sleeping_list.last = -1;
-  sleeping_list.counter = -1;
+  sleeping_list.counter = __INT64_MAX__;
   zombie_list.head = -1;
   zombie_list.last = -1;
-  zombie_list.counter = -1;
+  zombie_list.counter = __INT64_MAX__;
   struct processList* p;
   for (p = runnable_cpu_lists; p<&runnable_cpu_lists[current_cpu_number]; p++){
       
@@ -69,15 +70,46 @@ void lists_init(void){
   
 }
 
+struct proc* steal_proc(int curr_cpu){
+  int index;
+  struct processList* curr_list;
+  struct proc* p;
+  for (index = 0; index< current_cpu_number; index++){
+    if (index != curr_cpu){
+        acquire(&runnable_cpu_lists[index].head_lock);
+        curr_list = &runnable_cpu_lists[index];
+        if (curr_list->head != -1){
+          acquire(&proc[curr_list->head].list_lock);
+          
+          p = &proc[curr_list->head];
+          curr_list->head = p->next_proc_index;
+          acquire(&p->lock);
+          printf("cpu number %d stole proc index %d from cpu %d, index is %d\n", curr_cpu, p->proc_index, p->affiliated_cpu, index);
+          p->affiliated_cpu = curr_cpu;
+          release(&p->lock);
+          increment_counter(&runnable_cpu_lists[curr_cpu]);
+          release(&curr_list->head_lock);
+          release(&p->list_lock);
+          return p;
+        }
+        else{
+          release(&runnable_cpu_lists[index].head_lock);
+        }
+    }
+  }
+
+  return 0;
+}
+
 int get_balanced_cpu(void){
 
     uint64 min = runnable_cpu_lists[0].counter;
     int min_cpu = 0;
     if (current_cpu_number < 2)
       return 0;
-    int index = 1;
+    int index;
     struct processList* p = &runnable_cpu_lists[1];
-    for (;p<&runnable_cpu_lists[current_cpu_number];p++){
+    for (index=1;p<&runnable_cpu_lists[current_cpu_number];p++){
         if (p->counter<min){
             min = p->counter;
             min_cpu = index;
@@ -92,6 +124,7 @@ void remove_link(struct processList* list, int index){  // index = the process i
   //printf("start remove proc with index %d\n", index);
   acquire(&list->head_lock);
   if (list->head == -1){  //empty list
+    release(&list->head_lock);
     return;
   }
   acquire(&proc[list->head].list_lock);
@@ -165,7 +198,7 @@ void add_link(struct processList* list, int index, int is_yield){ // index = the
     p->next_proc_index = -1;
     release(&list->head_lock);
     release(&proc[index].list_lock);
-    if (balance && !is_yield && list->counter >= 0 ){
+    if (balance && !is_yield && list->counter != __INT64_MAX__ ){
       increment_counter(list);
     }
     //printf("finished add_link\n");
@@ -178,7 +211,7 @@ void add_link(struct processList* list, int index, int is_yield){ // index = the
       head->next_proc_index = index;
       list->last = index;
       p->next_proc_index = -1;
-      if (balance && list->counter >= 0 && !is_yield){
+      if (balance && list->counter != __INT64_MAX__ && !is_yield){
         increment_counter(list);
       }
       release(&head->list_lock);
@@ -193,7 +226,7 @@ void add_link(struct processList* list, int index, int is_yield){ // index = the
   last->next_proc_index = index;
   list->last = index;
   p->next_proc_index = -1;
-  if (balance && list->counter >= 0 && !is_yield){
+  if (balance && list->counter != __INT64_MAX__ && !is_yield){
     increment_counter(list);
   }
   release(&last->list_lock);
@@ -302,13 +335,13 @@ allocpid() {
 static struct proc*
 allocproc(void)
 {
-
+  acquire(&unused_list.head_lock);
   if (unused_list.head == -1){
-    printf("unused list is empty in allocproc\n");
+    release(&unused_list.head_lock);
     return 0;
   }
   struct proc *p = &proc[unused_list.head];
-
+  release(&unused_list.head_lock);
   acquire(&p->lock);
   while(p->state != UNUSED){
     release(&p->lock);
@@ -465,7 +498,7 @@ userinit(void)
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
-
+  p->affiliated_cpu = 0;
   p->state = RUNNABLE;
   //printf("try to insert init proc to runnable list\n");
   add_link(&runnable_cpu_lists[0], p->proc_index, 0); // init_proc index is 0
@@ -539,13 +572,16 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  acquire(&p->list_lock);
   np-> affiliated_cpu = p-> affiliated_cpu;
-  
+  release(&p->list_lock);
   //printf("in fork, try to insert proc %d to runnable list of cpu number %d", np->proc_index, np->affiliated_cpu);
   int cpu_to_add = np->affiliated_cpu;
   if (balance){
     cpu_to_add = get_balanced_cpu();
+    np->affiliated_cpu = cpu_to_add;
   }
+  
   add_link(&runnable_cpu_lists[cpu_to_add], np->proc_index, 0);
 
   release(&np->lock);
@@ -606,7 +642,7 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-
+  p->affiliated_cpu = 0;
   
   add_link(&zombie_list, p->proc_index, 0);
   release(&wait_lock);
@@ -686,7 +722,7 @@ scheduler(void)
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-
+    printf("");
     
     //printf("runnable list head is %d\n", runnable_cpu_lists[cpu_id].head);
     //procdump();
@@ -694,22 +730,36 @@ scheduler(void)
     //printf("chose proc with index %d\n", runnable_cpu_lists[cpu_id].head);
     
     //printf("head of runnable is %d\n",runnable_cpu_lists[cpu_id].head);
+    
     acquire(&ready_list->head_lock);
     if (ready_list->head == -1){
+        //printf("current cpu list is empty, try to steal\n");
         release(&ready_list->head_lock);
-        continue; // TODO: CHECK IT OUT
+        if (balance){
+          p = steal_proc(cpu_id);
+          //procdump();
+          //printf("took process with index %d\n", p->proc_index);
+          if (p == 0)
+            continue; // TODO: CHECK IT OUT
+        }
+        else{
+          continue;
+        }
     }
-    release(&ready_list->head_lock);
-    p = &proc[ready_list->head];
-    
-    remove_link(ready_list, p->proc_index);
+    else{
+      
+      p = &proc[ready_list->head];
+      release(&ready_list->head_lock);
+      remove_link(ready_list, p->proc_index);
+      
+    }
     acquire(&p->lock);
     
     if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
-        procdump();
+        //procdump();
         p->state = RUNNING;
         //remove_link(&runnable_cpu_lists[cpu_id], p->proc_index);
         c->proc = p;
@@ -924,6 +974,7 @@ wakeup(void *chan)
       cpu_to_add = curr->affiliated_cpu;
       if (balance){
           cpu_to_add = get_balanced_cpu();
+          curr->affiliated_cpu = cpu_to_add;
       }
       struct processList* cpuList = &runnable_cpu_lists[cpu_to_add];
       release(&curr->list_lock);
@@ -950,6 +1001,7 @@ wakeup(void *chan)
         cpu_to_add = curr->affiliated_cpu;
         if (balance){
             cpu_to_add = get_balanced_cpu();
+            curr->affiliated_cpu = cpu_to_add;
         }
         struct processList* cpuList = &runnable_cpu_lists[cpu_to_add];
         release(&curr->list_lock);
@@ -1088,6 +1140,6 @@ int cpu_process_count(int cpu_num){
   if (cpu_num >= current_cpu_number){
     return -1;
   }
-
+  
   return runnable_cpu_lists[cpu_num].counter;
 }
