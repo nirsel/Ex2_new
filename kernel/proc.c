@@ -88,8 +88,8 @@ struct proc* steal_proc(int curr_cpu){
           p->affiliated_cpu = curr_cpu;
           release(&p->lock);
           increment_counter(&runnable_cpu_lists[curr_cpu]);
-          release(&curr_list->head_lock);
           release(&p->list_lock);
+          release(&curr_list->head_lock);
           return p;
         }
         else{
@@ -214,8 +214,8 @@ void add_link(struct processList* list, int index, int is_yield){ // index = the
       if (balance && list->counter != __INT64_MAX__ && !is_yield){
         increment_counter(list);
       }
-      release(&head->list_lock);
       release(&list->head_lock);
+      release(&head->list_lock);
       release(&proc[index].list_lock);
       return;
   }
@@ -880,62 +880,6 @@ sleep(void *chan, struct spinlock *lk)
 
 // Wake up all processes sleeping on chan.
 // Must be called without any p->lock.
-void
-wakeup2(void *chan)
-{
-  struct proc *p;
-  
-  
-  int next_link_index = -1;
-  acquire(&sleeping_list.head_lock);
-  if (sleeping_list.head == -1){
-    printf("sleeping list is empty\n");
-    release(&sleeping_list.head_lock);
-    procdump();
-    return;
-  }
-  
-  acquire(&proc[sleeping_list.head].list_lock);
-  p = &proc[sleeping_list.head];
-  acquire(&p->lock);
-  if(p!=myproc()&&p->chan == chan) {
-        printf("waking up proc number %d\n", p->pid);
-        p->state = RUNNABLE;
-        next_link_index = p->next_proc_index;
-        release(&sleeping_list.head_lock);
-        release(&proc[sleeping_list.head].list_lock);
-        remove_link(&sleeping_list, p->proc_index);
-        add_link(&runnable_cpu_lists[p->affiliated_cpu], p->proc_index, 0);
-  }
-  else{
-        release(&sleeping_list.head_lock);
-        release(&proc[sleeping_list.head].list_lock);
-  }
-  release(&p->lock);
-
-  while(next_link_index != -1){   // TODO: NOT SAFE!!
-    acquire(&proc[next_link_index].list_lock);
-    p = &proc[next_link_index];
-    acquire(&p->lock);
-      if(p!=myproc()&&p->chan == chan) {
-        p->state = RUNNABLE;
-        release(&proc[next_link_index].list_lock);
-        next_link_index = p->next_proc_index;
-        remove_link(&sleeping_list, p->proc_index);
-        add_link(&runnable_cpu_lists[p->affiliated_cpu], p->proc_index, 0);
-    }
-    else{
-        release(&proc[next_link_index].list_lock);
-    }
-    release(&p->lock);
-  }
-
-  printf("exiting wakeup\n");
-
-  
-
-
-}
 
 void
 wakeup(void *chan)
