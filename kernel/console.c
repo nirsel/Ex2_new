@@ -93,7 +93,7 @@ consoleread(int user_dst, uint64 dst, int n)
         release(&cons.lock);
         return -1;
       }
-      //printf("enter sleep console\n");
+  
       sleep(&cons.r, &cons.lock);
     }
 

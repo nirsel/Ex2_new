@@ -375,13 +375,18 @@ truncate3(char *s)
 
   if(pid == 0){
     for(int i = 0; i < 100; i++){
+      
       char buf[32];
+      
       int fd = open("truncfile", O_WRONLY);
+      
       if(fd < 0){
         printf("%s: open failed\n", s);
         exit(1);
       }
+      
       int n = write(fd, "1234567890", 10);
+      
       if(n != 10){
         printf("%s: write got %d, expected 10\n", s, n);
         exit(1);
@@ -395,12 +400,17 @@ truncate3(char *s)
   }
 
   for(int i = 0; i < 150; i++){
+    
+     
     int fd = open("truncfile", O_CREATE|O_WRONLY|O_TRUNC);
+    
     if(fd < 0){
       printf("%s: open failed\n", s);
       exit(1);
     }
+    
     int n = write(fd, "xxx", 3);
+    
     if(n != 3){
       printf("%s: write got %d, expected 3\n", s, n);
       exit(1);
@@ -1767,6 +1777,7 @@ manywrites(char *s)
   int howmany = 30; // increase to look for deadlock
   
   for(int ci = 0; ci < nchildren; ci++){
+    
     int pid = fork();
     if(pid < 0){
       printf("fork failed\n");
@@ -1781,6 +1792,7 @@ manywrites(char *s)
       unlink(name);
       
       for(int iters = 0; iters < howmany; iters++){
+        
         for(int i = 0; i < ci+1; i++){
           int fd = open(name, O_CREATE | O_RDWR);
           if(fd < 0){
@@ -1805,6 +1817,7 @@ manywrites(char *s)
 
   for(int ci = 0; ci < nchildren; ci++){
     int st = 0;
+    
     wait(&st);
     if(st != 0)
       exit(st);
@@ -2676,7 +2689,9 @@ void
 execout(char *s)
 {
   for(int avail = 0; avail < 15; avail++){
+    
     int pid = fork();
+    
     if(pid < 0){
       printf("fork failed\n");
       exit(1);

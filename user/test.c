@@ -6,8 +6,10 @@ int main(int argc, char** argv){
 
     
     fork();
-    //fork();
-    printf("%d\n", cpu_process_count(0));
+    fork();
+    printf("go to sleep\n");
+    sleep(50);
+
    
     exit(0);
 
